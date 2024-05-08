@@ -1,4 +1,6 @@
-import cv2, pafy
+import cv2, pafy, yt_dlp, os
+from cv2.gapi import video
+from pytube import YouTube
 import numpy as np
 
 
@@ -6,10 +8,14 @@ class VideoProcessing():
 
     def read():
         url   = "https://www.youtube.com/watch?v=3N7BkyuEBAw&ab_channel=HashtagUnited"
-        video = pafy.new(url)
-        best  = video.getbest()
+        def is_video_downloaded(url):
+            return os.path.exists(f"FULL MATCH! - White Ensign vs Hashtag United [3N7BkyuEBAw].mp4")
+        if not is_video_downloaded(url):
+            video = yt_dlp.YoutubeDL().download(url)
+        else:
+            video = f"FULL MATCH! - White Ensign vs Hashtag United [3N7BkyuEBAw].mp4"
 
-        capture = cv2.VideoCapture(best.url)
+        capture = cv2.VideoCapture(video)
         
         backSub = cv2.createBackgroundSubtractorKNN() 
         
