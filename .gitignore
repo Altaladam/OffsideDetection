@@ -407,3 +407,8 @@ FodyWeavers.xsd
 
 # videos
 *.mp4
+dst.png
+vid.mov
+yolov8m-seg.pt
+OffsideDetection/fm_test_2.mkv
+OffsideDetection/fm_test.mkv
