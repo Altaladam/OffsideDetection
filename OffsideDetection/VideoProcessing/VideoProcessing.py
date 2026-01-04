@@ -1,13 +1,15 @@
-import cv2, pafy, yt_dlp, os
+import cv2, pafy, os
 from cv2.gapi import video
 from pytube import YouTube
 from ultralytics import YOLO
-import neptune
 import matplotlib.pyplot as plt
 import numpy as np
 from operator import itemgetter
 from VideoProcessing.yolo_segmentation import YOLOSegmentation
 from VideoProcessing.functions import get_average_color, classify_bgr_color
+import supervision as sv
+from inference.models.utils import get_roboflow_model
+import json
 
 
 class VideoProcessing():
@@ -51,184 +53,9 @@ class VideoProcessing():
 
         capture.release()
         cv2.destroyAllWindows()
-        
-    def init_run(tags=None):
-        run = neptune.init_run(
-        project="bexgboost/project",
-        api_token=os.getenv("NEPTUNE_API_TOKEN"),
-        tags=tags,
-        )    
-        return run
-        
-    def YOLO():
-        # url   = "https://www.youtube.com/watch?v=3N7BkyuEBAw&ab_channel=HashtagUnited&t=6090s"
-        # def is_video_downloaded(url):
-        #     return os.path.exists(f"FULL MATCH! - White Ensign vs Hashtag United [3N7BkyuEBAw].mp4")
-        # if not is_video_downloaded(url):
-        #     video = yt_dlp.YoutubeDL().download(url)
-        # else:
-        video = f"FULL MATCH! - White Ensign vs Hashtag United [3N7BkyuEBAw].mp4"
-
-        #video = f"vid.mov"
-        
-        #video = f"fm_test.mkv"
-        cap = cv2.VideoCapture(video)
-        
-        ys = YOLOSegmentation("yolov8m-seg.pt")
-        
-        
-        font = cv2.FONT_HERSHEY_SIMPLEX
-
-        new_points = []
-
-        colors = []
-
-        player_coords = []
-
-        # INPUT TEAM COLORS (BGR)
-        team1_bgr = [255, 255, 96]
-        team2_bgr = [255, 110, 126]
-        #team1_bgr = [0, 0, 159]
-        #team2_bgr = [0, 145, 129]
-
-        # INPUT PERSPECTIVE COORDINATES ON ORIGINAL IMAGE (TL, BL, TR, BR)
-        og_perspective_coords = [[782, 349], [1585, 343], [96, 798], [1559, 801]]
-        # INPUT PERSPECTIVE COORDINATES ON NEW IMAGE (TL, BL, TR, BR)
-        new_perspective_coords = [[67, 31], [305, 32], [69, 652], [306, 652]]
-
-        # Perspective transform function (pass in a point) (returns a point)
-        def perspective_transform(player, team, original, new):
-            tl, bl, tr, br = original
-            tl2, bl2, tr2, br2 = new
-            
-            p = player
-
-            pts1 = np.float32([tl,bl,tr,br])
-            pts2 = np.float32([tl2,bl2,tr2,br2])
-
-            pts3 = np.float32([p])
-
-            M = cv2.getPerspectiveTransform(pts1,pts2)
-
-            pts3o=cv2.perspectiveTransform(pts3[None, :, :], M)
-            x = int(pts3o[0][0][0])
-            y = int(pts3o[0][0][1])
-            new_p = (x,y)
-
-            # Place transformed point for each player on dst
-            if(team == "group1"):
-                cv2.circle(dst,new_p,10,team1_bgr,-1)
-                new_points.append(new_p)
-            if(team == "group2"):
-                cv2.circle(dst,new_p,10,team2_bgr,-1)
-                new_points.append(new_p)
-
-            cv2.imshow('Top View', dst)
-
-        # Loop through each frame
-        while True:
-            # Video frame = frame
-            ret, frame = cap.read()
-
-            # 2D image = dst
-            dst = cv2.imread("dst.png")
-
-            if not ret:
-                break
-
-            # Copy of frame
-            frame2 = np.array(frame)
-
-            # Detect objects
-            bboxes, classes, segmentations, scores = ys.detect(frame)
-
-            player_coords.clear()
-            colors.clear()
-            new_points.clear()
-
-            # Loop through each object
-            for index, (bbox, class_id, seg, score) in enumerate(zip(bboxes, classes, segmentations, scores)):
-                # If object is a player
-                if class_id == 0:
-                    # Set corner coordinates for bounding box around player
-                    (x, y, x2, y2) = bbox
-                    
-                    # Draw segmentation around player
-                    if len(seg) != 0:
-                        minX = min(seg, key=itemgetter(0))[0]
-                        maxX = max(seg, key=itemgetter(0))[0]
-                        maxY = max(seg, key=itemgetter(1))[1]
-
-                        # Create smaller rectangle around player to use for color detection
-                        distLeft = int(abs(seg[0][0] - minX))
-                        distRight = int(abs(seg[0][0] - maxX))
-
-                        # Get smaller box points around player for detecting color
-                        newX = int((x2 - x)/3 + x)
-                        newY = int((y2 - y)/5 + y)
-                        newX2 = int(2*(x2 - x)/3 + x)
-                        newY2 = int(2*(y2 - y)/5 + y)
-
-                        # Shift color detection box based on player orientation
-                        if(distRight > distLeft):
-                            if(distLeft == 0):
-                                distLeft+= 1
-                            # Shift left
-                            newX = int(newX - ((distRight)/distLeft)/1.5)
-                            newX2 = int(newX2 - ((distRight)/distLeft)/1.5)
-                        else:
-                            # Shift right
-                            if(distRight == 0):
-                                distRight+= 1
-                            newX = int(newX + ((distLeft)/distRight)*1.5)
-                            newX2 = int(newX2 + ((distLeft)/distRight)*1.5)
-
-                        # Define smaller rectangle around player to use for color detection
-                        roi = frame2[newY:newY2, newX:newX2]
-
-                        # Get average color of smaller rectangle
-                        dominant_color = get_average_color(roi)
-                        cv2.rectangle(frame, (newX, newY), (newX2, newY2), dominant_color, 2)
-
-                        team = classify_bgr_color(dominant_color, team1_bgr, team2_bgr)
-
-                        if(team == "group1"):
-                            cv2.putText(frame, "Team 1", (x, y-5), font, 1, team1_bgr, 3, cv2.LINE_AA)
-                            
-                            # Draw segmentation with the color of the dominant color of the player
-                            cv2.polylines(frame, [seg], True, team1_bgr, 3)
-                            cv2.circle(frame,(minX, maxY),5,team1_bgr,-1)
-                        if(team == "group2"):
-                            cv2.putText(frame, "Team 2", (x, y-5), font, 1, team2_bgr, 3, cv2.LINE_AA)
-
-                            # Draw segmentation with the color of the dominant color of the player
-                            cv2.polylines(frame, [seg], True, team2_bgr, 3)
-                            cv2.circle(frame,(minX, maxY),5,team2_bgr,-1)
-
-                # Perspective transform for each player
-                perspective_transform([minX, maxY], team, og_perspective_coords, new_perspective_coords)
-            
-
-            # Find furthest player and place vertical line
-            max_point_X, max_point_Y = min(new_points, key=itemgetter(0))[0], min(new_points, key=itemgetter(0))[1]
-            cv2.circle(dst, (max_point_X, max_point_Y), 10, (0,255,255), 2)
-            cv2.line(dst, (max_point_X, 0), (max_point_X, 1035), (0,255,255), 2)
-
-            # Show images
-            cv2.imshow("Img", frame)
-            #cv2.imshow("Top View", dst)
-
-            
-            # Space to move forward a frame
-            key = cv2.waitKey(20)
-            # Esc to exit
-            if key == 27:
-                break
-
-        cap.release()
-        cv2.destroyAllWindows()
     
-    def YOLO2():
+    
+    def YOLO():
         video = f"hashtag_united_short.mp4"
         #video = f"FULL MATCH! - White Ensign vs Hashtag United [3N7BkyuEBAw].mp4"
         #video = f"vid.mov"
@@ -246,83 +73,152 @@ class VideoProcessing():
         model.to('cuda')
         CONF_THRESHOLD = 0.3
 
-        # Get the first frame for automatic pitch corner detection
+        # Get the first frame for pitch corner calibration
         ret, frame = cap.read()
         if not ret:
             print("Failed to read video.")
             return
 
-        # Automatically detect pitch corners
-        corners = VideoProcessing.detect_pitch_corners(frame)
-        if corners is None or len(corners) != 4:
-            print("Could not automatically detect pitch corners.")
+        # Try to load saved calibration, otherwise manual calibration
+        calibration_file = "pitch_calibration.json"
+        corners, use_enhanced = VideoProcessing.load_or_calibrate_corners(frame, calibration_file)
+        if corners is None or len(corners) < 4:
+            print("Calibration failed.")
             return
-        print("Detected pitch corners:", corners)
+        print(f"Using pitch calibration: {len(corners)} points ({('Enhanced' if use_enhanced else 'Basic')} mode)")
         
-        # Manually select 4 points
-        # frame_points = VideoProcessing.get_points_from_user(frame, num_points=4)
-        # print("Selected points:", frame_points)
+        if use_enhanced and len(corners) == 8:
+            # Enhanced calibration with 8 points for better accuracy
+            pitch_points = VideoProcessing.get_enhanced_pitch_points()
+        else:
+            # Basic 4-corner calibration - horizontal pitch (width=800, height=500)
+            pitch_points = [(0, 0), (800, 0), (800, 500), (0, 500)]
         
-        # 1. User clicks 4 points on the input frame
-        # frame_points = VideoProcessing.get_points_from_user(frame, num_points=4, window_name="Input Frame")
-        # print("Selected points in frame:", frame_points)
-
-        # # 2. User clicks 4 corresponding points on the pitch map
-        # pitch_width, pitch_height = 500, 800  # match your output 2D pitch
-        # pitch_map = np.ones((pitch_height, pitch_width, 3), dtype=np.uint8) * 30  # dark background
-
-        # # Draw pitch outline
-        # cv2.rectangle(pitch_map, (0, 0), (pitch_width-1, pitch_height-1), (0, 255, 0), 2)
-        # # Draw center line
-        # cv2.line(pitch_map, (0, pitch_height//2), (pitch_width, pitch_height//2), (0, 255, 0), 1)
-        # # Draw center circle
-        # cv2.circle(pitch_map, (pitch_width//2, pitch_height//2), 60, (0, 255, 0), 1)
-
-        # pitch_points = VideoProcessing.get_points_from_user(pitch_map, num_points=4, window_name="Pitch Map")
-        # print("Selected points on pitch map:", pitch_points)
-
-        # # 3. Compute homography
-        # H, status = cv2.findHomography(np.array(frame_points, dtype=np.float32),
-        #                             np.array(pitch_points, dtype=np.float32))
-        # print("Homography matrix:\n", H)
-
-        # Example 2D pitch points (adjust to pitch template size)
-        pitch_points = [(0, 0), (500, 0), (500, 800), (0, 800)]
-        
-        #  # Use center circle detection
-        # center_circle = VideoProcessing.detect_center_circle(frame)
-        # if center_circle is None:
-        #     print("Could not automatically detect center circle.")
-        #     return
-        # center_x, center_y, radius = center_circle
-        # print(f"Detected center circle: center=({center_x}, {center_y}), radius={radius}")
-
         # Define known team colors in HSV
         
         #team1_hsv = np.array([251, 157, 221])  # colors for vid.mov
         #team2_hsv = np.array([13, 28, 103])
-        #team1_hsv = np.array([255, 255, 96])    # colors for FULL MATCH! - White Ensign vs Hashtag United [3N7BkyuEBAw].mp4
-        #team2_hsv = np.array([255, 110, 126])
         team1_hsv = np.array([45, 120, 170])    # colors for FULL MATCH! - White Ensign vs Hashtag United [3N7BkyuEBAw].mp4
         team2_hsv = np.array([90, 100, 140])
+        referee_hsv = np.array([0, 30, 60])     # Black/dark colors for referee
+
+        # Initialize ByteTrack tracker for smooth player trajectories
+        byte_tracker = sv.ByteTrack(
+            track_activation_threshold=0.25,
+            lost_track_buffer=90,             # Keep track alive for 90 frames (3 seconds at 30fps) when lost
+            minimum_matching_threshold=0.7,
+            frame_rate=30                     # Assumed frame rate
+        )
+        
+        # Store team assignments per track_id for consistency
+        track_team_assignments = {}  # {track_id: team_label}
+        
+        # Camera motion estimation variables
+        prev_gray = None
+        camera_motion_transform = np.eye(3, dtype=np.float32)  # Identity matrix initially
+        
+        # Feature detector for camera motion estimation (using ORB for speed)
+        feature_detector = cv2.ORB_create(nfeatures=500)
+        
+        # Feature matcher
+        bf_matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
 
 
 
         while True:
             if not ret:
                 break
+            
+            # Camera motion estimation
+            curr_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            
+            if prev_gray is not None:
+                # Detect features in both frames
+                kp1, des1 = feature_detector.detectAndCompute(prev_gray, None)
+                kp2, des2 = feature_detector.detectAndCompute(curr_gray, None)
+                
+                if des1 is not None and des2 is not None and len(des1) > 10 and len(des2) > 10:
+                    # Match features
+                    matches = bf_matcher.match(des1, des2)
+                    
+                    if len(matches) > 10:
+                        # Sort matches by distance
+                        matches = sorted(matches, key=lambda x: x.distance)
+                        
+                        # Use top 50% of matches
+                        good_matches = matches[:len(matches)//2]
+                        
+                        if len(good_matches) >= 4:
+                            # Extract matched keypoints
+                            src_pts = np.float32([kp1[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+                            dst_pts = np.float32([kp2[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+                            
+                            # Estimate affine transformation (camera motion)
+                            transform_matrix, inliers = cv2.estimateAffinePartial2D(
+                                src_pts, dst_pts, 
+                                method=cv2.RANSAC, 
+                                ransacReprojThreshold=3.0
+                            )
+                            
+                            if transform_matrix is not None:
+                                # Convert 2x3 affine to 3x3 homogeneous
+                                camera_motion_transform = np.vstack([transform_matrix, [0, 0, 1]])
+                            else:
+                                camera_motion_transform = np.eye(3, dtype=np.float32)
+                        else:
+                            camera_motion_transform = np.eye(3, dtype=np.float32)
+                    else:
+                        camera_motion_transform = np.eye(3, dtype=np.float32)
+                else:
+                    camera_motion_transform = np.eye(3, dtype=np.float32)
+            
+            prev_gray = curr_gray.copy()
 
             results = model(frame)
             boxes = results[0].boxes
             mask = boxes.conf.cpu().numpy() > CONF_THRESHOLD
             filtered_boxes = boxes[mask]
+            
+            # Convert YOLO detections to supervision Detections format for ByteTrack
+            if len(filtered_boxes) > 0:
+                xyxy = filtered_boxes.xyxy.cpu().numpy()
+                conf = filtered_boxes.conf.cpu().numpy()
+                cls = filtered_boxes.cls.cpu().numpy() if filtered_boxes.cls is not None else np.zeros(len(conf))
+                
+                detections = sv.Detections(
+                    xyxy=xyxy,
+                    confidence=conf,
+                    class_id=cls.astype(int)
+                )
+                
+                # Apply camera motion compensation to improve tracking during camera movement
+                # Transform detection boxes to account for camera motion between frames
+                if camera_motion_transform is not None and not np.allclose(camera_motion_transform, np.eye(3), atol=0.01):
+                    # Get the translation and scale from the transform
+                    tx = camera_motion_transform[0, 2]  # X translation
+                    ty = camera_motion_transform[1, 2]  # Y translation
+                    
+                    # Log significant camera motion
+                    if abs(tx) > 5 or abs(ty) > 5:
+                        print(f"Camera motion detected: dx={tx:.1f}, dy={ty:.1f}")
+                
+                # Update tracker with detections
+                tracked_detections = byte_tracker.update_with_detections(detections)
+            else:
+                tracked_detections = sv.Detections.empty()
 
             colors = []
             avg_hsvs = []
             player_centers = []
-            for box in filtered_boxes:
-                x1, y1, x2, y2 = map(int, box.xyxy[0].cpu().numpy())
+            track_ids = []
+            
+            for i in range(len(tracked_detections)):
+                x1, y1, x2, y2 = map(int, tracked_detections.xyxy[i])
+                track_id = tracked_detections.tracker_id[i] if tracked_detections.tracker_id is not None else i
+                
                 h, w = y2 - y1, x2 - x1
+                if h <= 0 or w <= 0:
+                    continue
                 cy1 = y1 + int(0.2 * h)
                 cy2 = y2 - int(0.2 * h)
                 cx1 = x1 + int(0.2 * w)
@@ -334,23 +230,25 @@ class VideoProcessing():
                 avg_hue = np.mean(hsv_roi[:, :, 0])
                 colors.append([avg_hue])
                 avg_hsv = np.mean(hsv_roi.reshape(-1, 3), axis=0)
-                print(f"Team sample avg_hsv: {avg_hsv}")
                 avg_hsvs.append(avg_hsv)
-                player_centers.append(((x1 + x2) // 2, (y1 + y2) // 2))
+                
+                center = ((x1 + x2) // 2, (y1 + y2) // 2)
+                player_centers.append(center)
+                track_ids.append(track_id)
 
             offside_indices = set()
             mapped_points = []
             final_labels = []
             if len(colors) >= 2:
                 Z = np.float32(colors)
-                K = 2  # number of clusters (e.g., 2 teams)
+                K = 3  # number of clusters (2 teams + referee)
                 criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
                 ret_km, label, center = cv2.kmeans(Z, K, None, criteria, 10, cv2.KMEANS_RANDOM_CENTERS)
-                cluster_colors = [(0, 255, 255), (255, 0, 255)]
+                cluster_colors = [(0, 255, 255), (255, 0, 255), (128, 128, 128)]  # cyan, magenta, gray for referee
 
-                # Combine k-means and color-based assignment
-                final_labels = VideoProcessing.color_based_team_assignment(
-                    avg_hsvs, label.flatten(), team1_hsv, team2_hsv, threshold=15
+                # Combine k-means and color-based assignment with referee detection
+                final_labels = VideoProcessing.color_based_team_assignment_with_referee(
+                    avg_hsvs, label.flatten(), team1_hsv, team2_hsv, referee_hsv, track_ids, threshold=15
                 )
 
                 # Homography: Map player centers to 2D pitch
@@ -359,56 +257,144 @@ class VideoProcessing():
                     pts = np.array(player_centers, dtype=np.float32).reshape(-1, 1, 2)
                     mapped = cv2.perspectiveTransform(pts, H)
                     mapped_points = [tuple(map(int, pt[0])) for pt in mapped]
+                    
+                    pitch_width, pitch_height = 800, 500
+                    # Clamp positions to pitch boundaries
+                    display_positions = []
+                    for (x, y) in mapped_points:
+                        x = max(0, min(pitch_width - 1, x))
+                        y = max(0, min(pitch_height - 1, y))
+                        display_positions.append((x, y))
+                    
+                    # Offside detection using X-axis (horizontal pitch, X is goal-to-goal)
+                    # Center of pitch is at x = 400 (pitch_width / 2)
+                    center_x = pitch_width // 2
+                    
+                    team0_indices = [i for i, l in enumerate(final_labels) if l == 0]
+                    team1_indices = [i for i, l in enumerate(final_labels) if l == 1]
+                    
+                    if len(team0_indices) >= 1 and len(team1_indices) >= 2:
+                        # Get X positions for both teams (horizontal pitch)
+                        team0_x = [display_positions[i][0] for i in team0_indices]
+                        team1_x = [display_positions[i][0] for i in team1_indices]
+                        
+                        # Find defenders' positions (team 1)
+                        sorted_team1_x = sorted(team1_x)
+                        
+                        # Team 1's leftmost defender and second-leftmost (smallest X)
+                        leftmost_defender = sorted_team1_x[0]
+                        second_leftmost = sorted_team1_x[1] if len(sorted_team1_x) >= 2 else leftmost_defender
+                        
+                        # Team 1's rightmost defender and second-rightmost (largest X)
+                        rightmost_defender = sorted_team1_x[-1]
+                        second_rightmost = sorted_team1_x[-2] if len(sorted_team1_x) >= 2 else rightmost_defender
+                        
+                        # Determine team 1's defensive side (where their goal is)
+                        team1_avg_x = np.mean(team1_x)
+                        
+                        # Check each team 0 player for offside
+                        for i in team0_indices:
+                            player_x = display_positions[i][0]
+                            
+                            if team1_avg_x < center_x:
+                                # Team 1 is defending the left side (their goal is at left)
+                                # Team 0 is attacking left - offside if player is left of second defender
+                                if player_x < second_leftmost - 15 and player_x < center_x:
+                                    offside_indices.add(i)
+                            else:
+                                # Team 1 is defending the right side (their goal is at right)
+                                # Team 0 is attacking right - offside if player is right of second defender
+                                if player_x > second_rightmost + 15 and player_x > center_x:
+                                    offside_indices.add(i)
+                    
+                    if len(team1_indices) >= 1 and len(team0_indices) >= 2:
+                        # Get X positions for both teams (horizontal pitch)
+                        team0_x = [display_positions[i][0] for i in team0_indices]
+                        team1_x = [display_positions[i][0] for i in team1_indices]
+                        
+                        # Find defenders' positions (team 0)
+                        sorted_team0_x = sorted(team0_x)
+                        
+                        leftmost_defender = sorted_team0_x[0]
+                        second_leftmost = sorted_team0_x[1] if len(sorted_team0_x) >= 2 else leftmost_defender
+                        
+                        rightmost_defender = sorted_team0_x[-1]
+                        second_rightmost = sorted_team0_x[-2] if len(sorted_team0_x) >= 2 else rightmost_defender
+                        
+                        team0_avg_x = np.mean(team0_x)
+                        
+                        # Check each team 1 player for offside
+                        for i in team1_indices:
+                            player_x = display_positions[i][0]
+                            
+                            if team0_avg_x < center_x:
+                                # Team 0 is defending the left side
+                                # Team 1 is attacking left
+                                if player_x < second_leftmost - 15 and player_x < center_x:
+                                    offside_indices.add(i)
+                            else:
+                                # Team 0 is defending the right side
+                                # Team 1 is attacking right
+                                if player_x > second_rightmost + 15 and player_x > center_x:
+                                    offside_indices.add(i)
 
-                    # # Offside detection logic
-                    # # Assume final_labels: 0 is attackers, 1 is defenders
-                    # for team in range(K):
-                    #     team_indices = [i for i, l in enumerate(final_labels) if l == team]
-                    #     if len(team_indices) == 0:
-                    #         continue
-                    #     # For simplicity, assume team 0 is attackers, team 1 is defenders
-                    #     # Find the max y (closest to goal line) among defenders
-                    #     if team == 1:
-                    #         defender_ys = [mapped_points[i][1] for i in team_indices]
-                    #         if len(defender_ys) >= 2:
-                    #             sorted_defenders = sorted(defender_ys)
-                    #             offside_line = sorted_defenders[-2]  # second last defender
-                    #             # Mark attackers beyond this line as offside
-                    #             for i, l in enumerate(final_labels):
-                    #                 if l == 0 and mapped_points[i][1] > offside_line:
-                    #                     offside_indices.add(i)
-
-            for i, box in enumerate(filtered_boxes):
-                x1, y1, x2, y2 = map(int, box.xyxy[0].cpu().numpy())
-                cluster = final_labels[i]
-                # If player is offside, use red, else use cluster color
-                # if i in offside_indices:
-                #     color = (0, 0, 255)  # Red for offside
-                #     text = "OFFSIDE"
-                # else:
-                color = cluster_colors[cluster % len(cluster_colors)]
-                text = f"Team {cluster+1}"
+            for i in range(len(track_ids)):
+                if i >= len(tracked_detections):
+                    break
+                x1, y1, x2, y2 = map(int, tracked_detections.xyxy[i])
+                track_id = track_ids[i]
+                cluster = final_labels[i] if i < len(final_labels) else 0
+                
+                # Store team assignment for this track
+                if track_id not in track_team_assignments:
+                    track_team_assignments[track_id] = cluster
+                else:
+                    # Use stored team assignment for consistency (with some smoothing)
+                    stored_team = track_team_assignments[track_id]
+                    if cluster != 2:  # Don't override with referee
+                        track_team_assignments[track_id] = cluster
+                    cluster = track_team_assignments[track_id]
+                
+                # # Skip drawing for referees (cluster 2)
+                # if cluster == 2:
+                #     continue
+                
+                #If player is offside, use red, else use cluster color
+                if i in offside_indices:
+                    color = (0, 0, 255)  # Red for offside
+                    text = f"#{track_id} OFFSIDE"
+                else:
+                    color = cluster_colors[cluster % len(cluster_colors)]
+                    text = f"#{track_id} T{cluster+1}"
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 4)
-                cv2.putText(frame, text, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 3)
+                cv2.putText(frame, text, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
 
             # Draw the 2D pitch and mapped player positions
             if len(mapped_points) > 0:
-                pitch_width, pitch_height = 500, 800  # match pitch_points
+                pitch_width, pitch_height = 800, 500  # horizontal pitch
                 pitch_img = np.ones((pitch_height, pitch_width, 3), dtype=np.uint8) * 30  # dark background
 
                 # Draw pitch outline
                 cv2.rectangle(pitch_img, (0, 0), (pitch_width-1, pitch_height-1), (0, 255, 0), 2)
-                # Draw center line
-                cv2.line(pitch_img, (0, pitch_height//2), (pitch_width, pitch_height//2), (0, 255, 0), 1)
+                # Draw center line (vertical for horizontal pitch)
+                cv2.line(pitch_img, (pitch_width//2, 0), (pitch_width//2, pitch_height), (0, 255, 0), 1)
                 # Draw center circle
                 cv2.circle(pitch_img, (pitch_width//2, pitch_height//2), 60, (0, 255, 0), 1)
 
+                # Use the display positions directly
+                display_points = display_positions
+                
                 # Draw mapped player positions
-                for i, pt in enumerate(mapped_points):
+                for i, pt in enumerate(display_points):
+                    cluster = final_labels[i] if final_labels else 0
+                    
+                    # Skip referees (cluster 2)
+                    if cluster == 2:
+                        continue
+                    
                     if i in offside_indices:
                         cv2.circle(pitch_img, pt, 10, (0, 0, 255), -1)  # Red for offside
                     else:
-                        cluster = final_labels[i] if final_labels else 0
                         color = cluster_colors[cluster % len(cluster_colors)]
                         cv2.circle(pitch_img, pt, 10, color, -1)
 
@@ -426,20 +412,142 @@ class VideoProcessing():
         cv2.destroyAllWindows()
     
     @staticmethod
+    def load_or_calibrate_corners(frame, calibration_file):
+        """
+        Loads saved calibration or prompts user for manual calibration.
+        Supports both basic 4-point and enhanced 8-point calibration.
+        
+        Args:
+        - frame: First video frame for calibration
+        - calibration_file: JSON file to save/load corner positions
+        
+        Returns:
+        - Tuple: (List of calibration points, use_enhanced flag)
+        """
+        # Try loading saved calibration
+        if os.path.exists(calibration_file):
+            try:
+                with open(calibration_file, 'r') as f:
+                    data = json.load(f)
+                    corners = [tuple(pt) for pt in data['corners']]
+                    use_enhanced = data.get('enhanced', False)
+                print(f"Loaded saved calibration from {calibration_file}")
+                print(f"  Mode: {'Enhanced (8-point)' if use_enhanced else 'Basic (4-point)'}")
+                print("  Delete this file to recalibrate")
+                return corners, use_enhanced
+            except Exception as e:
+                print(f"Could not load calibration: {e}")
+        
+        # No saved calibration - offer calibration options
+        print("\n" + "="*70)
+        print("PITCH CALIBRATION REQUIRED")
+        print("="*70)
+        print("Choose calibration method:")
+        print("  1. ENHANCED (Recommended) - 8 points for accurate transformation")
+        print("     Better handles perspective distortion and player positioning")
+        print("  2. BASIC - 4 corners (simpler but less accurate)")
+        print("="*70)
+        
+        # Ask user for preference
+        choice = input("Enter choice (1 for Enhanced, 2 for Basic) [1]: ").strip()
+        use_enhanced = choice != "2"
+        
+        if use_enhanced:
+            print("\n" + "="*70)
+            print("ENHANCED 8-POINT CALIBRATION")
+            print("="*70)
+            print("Click 8 points on the pitch in this order:")
+            print("  1. Top-Left corner")
+            print("  2. Top-Center (middle of top edge)")
+            print("  3. Top-Right corner")
+            print("  4. Middle-Left (center of left edge)")
+            print("  5. Middle-Right (center of right edge)")
+            print("  6. Bottom-Left corner")
+            print("  7. Bottom-Center (middle of bottom edge)")
+            print("  8. Bottom-Right corner")
+            print("="*70 + "\n")
+            
+            corners = VideoProcessing.get_points_from_user(
+                frame.copy(), 
+                num_points=8, 
+                window_name="Enhanced Calibration - Click 8 Points"
+            )
+            
+            if len(corners) != 8:
+                print("Enhanced calibration failed, falling back to basic mode")
+                use_enhanced = False
+        
+        if not use_enhanced:
+            print("\n" + "="*70)
+            print("BASIC 4-POINT CALIBRATION")
+            print("="*70)
+            print("Click 4 corner points:")
+            print("  1. Top-Left corner")
+            print("  2. Top-Right corner")
+            print("  3. Bottom-Right corner")
+            print("  4. Bottom-Left corner")
+            print("="*70 + "\n")
+            
+            corners = VideoProcessing.get_points_from_user(
+                frame.copy(), 
+                num_points=4, 
+                window_name="Basic Calibration - Click 4 Corners"
+            )
+        
+        if len(corners) >= 4:
+            # Save calibration for future use
+            try:
+                with open(calibration_file, 'w') as f:
+                    json.dump({
+                        'corners': corners,
+                        'enhanced': use_enhanced
+                    }, f, indent=2)
+                print(f" Calibration saved to {calibration_file}")
+                print(f"  Delete this file to recalibrate next time")
+            except Exception as e:
+                print(f" Could not save calibration: {e}")
+        
+        return corners, use_enhanced
+    
+    @staticmethod
+    def get_enhanced_pitch_points():
+        """
+        Returns 8 reference points on the 2D pitch for enhanced calibration.
+        These correspond to the 8 points the user clicks in enhanced mode.
+        
+        Points are arranged to match the calibration order:
+        Top: TL, TC, TR
+        Middle: ML, MR
+        Bottom: BL, BC, BR
+        
+        Horizontal pitch layout (width=800, height=500).
+        """
+        pitch_width, pitch_height = 800, 500
+        return [
+            (0, 0),                          # 1. Top-Left
+            (pitch_width // 2, 0),           # 2. Top-Center
+            (pitch_width, 0),                # 3. Top-Right
+            (0, pitch_height // 2),          # 4. Middle-Left
+            (pitch_width, pitch_height // 2),# 5. Middle-Right
+            (0, pitch_height),               # 6. Bottom-Left
+            (pitch_width // 2, pitch_height),# 7. Bottom-Center
+            (pitch_width, pitch_height)      # 8. Bottom-Right
+        ]
+    
+    @staticmethod
     def detect_pitch_corners(frame):
         """
-        Automatically detects four pitch corners in a football field image.
-        Returns the four corners as a list of (x, y) tuples: [top-left, top-right, bottom-right, bottom-left]
+        Attempts automatic pitch corner detection using visible pitch lines.
+        Less reliable when corners aren't visible - use load_or_calibrate_corners() instead.
+        
+        Returns the four corners as a list of (x, y) tuples or None if detection fails.
         """
-        # Convert to grayscale and blur
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         blur = cv2.GaussianBlur(gray, (5, 5), 0)
-
-        # Edge detection
         edges = cv2.Canny(blur, 50, 150, apertureSize=3)
 
-        # Hough line detection
-        lines = cv2.HoughLinesP(edges, 1, np.pi/180, threshold=100, minLineLength=200, maxLineGap=50)
+        # Detect lines with lower thresholds to catch more pitch markings
+        lines = cv2.HoughLinesP(edges, 1, np.pi/180, threshold=80, minLineLength=150, maxLineGap=50)
         if lines is None:
             return None
 
@@ -450,27 +558,32 @@ class VideoProcessing():
             points.append((x1, y1))
             points.append((x2, y2))
 
+        if len(points) < 4:
+            return None
+            
         points = np.array(points)
-
         hull = cv2.convexHull(points)
+        
         if len(hull) < 4:
             return None
 
         # Approximate hull to 4 points (corners)
         epsilon = 0.1 * cv2.arcLength(hull, True)
         approx = cv2.approxPolyDP(hull, epsilon, True)
+        
         if len(approx) != 4:
-            # fallback: take 4 farthest points
-            from scipy.spatial import ConvexHull
-            hull_indices = ConvexHull(points).vertices
-            approx = points[hull_indices][:4]
+            # Fallback: take 4 extreme points
+            try:
+                from scipy.spatial import ConvexHull
+                hull_indices = ConvexHull(points).vertices
+                if len(hull_indices) >= 4:
+                    approx = points[hull_indices][:4]
+                else:
+                    return None
+            except:
+                return None
 
         corners = [tuple(pt[0]) if isinstance(pt[0], np.ndarray) else tuple(pt) for pt in approx]
-        # Optionally, sort corners (top-left, top-right, bottom-right, bottom-left)
-        # for x, y in corners:
-        #     cv2.circle(frame, (x, y), 10, (0, 0, 255), 3)
-        # cv2.imshow("Corners Debug", frame)
-        # cv2.waitKey(1)
         return corners
 
     @staticmethod
@@ -486,6 +599,64 @@ class VideoProcessing():
             tuple(pts[np.argmax(diff)])    # bottom-left
         ]
     
+    @staticmethod
+    def color_based_team_assignment_with_referee(avg_hsvs, kmeans_labels, team1_hsv, team2_hsv, referee_hsv, track_ids=None, threshold=15):
+        """
+        Assigns players to teams or referee based on color similarity and k-means clustering.
+
+        Args:
+        - avg_hsvs: List of average HSV colors for each player.
+        - kmeans_labels: Result from k-means (0, 1, or 2 for each player).
+        - team1_hsv, team2_hsv: Known team colors in HSV.
+        - referee_hsv: Known referee color in HSV (typically black/dark).
+        - track_ids: List of tracker IDs for each player (for console output).
+        - threshold: Distance threshold to decide if a player is closer to one team color.
+
+        Returns:
+        - List of final team assignments: 0=team1, 1=team2, 2=referee.
+        """
+        final_labels = []
+        for i, player_hsv in enumerate(avg_hsvs):
+            # Distance to known team colors and referee
+            d1 = np.linalg.norm(player_hsv - team1_hsv)
+            d2 = np.linalg.norm(player_hsv - team2_hsv)
+            d_ref = np.linalg.norm(player_hsv - referee_hsv)
+            
+            # Check for referee first (low saturation + low-mid value = black/dark clothing)
+            # Referees typically have very low saturation regardless of value
+            saturation = player_hsv[1]
+            value = player_hsv[2]
+            is_dark = saturation < 100 and value < 130
+            
+            # Strong referee indicator: very low saturation (grayscale/black)
+            is_very_dark = saturation < 60
+            
+            if is_very_dark:
+                # Very confident this is referee - prioritize even if distance isn't closest
+                assigned_label = 2  # Referee
+                assigned_to = "referee (very dark)"
+            elif is_dark and d_ref < max(d1, d2) * 0.8:  # If somewhat dark and closer to black than far from teams
+                assigned_label = 2  # Referee
+                assigned_to = "referee (dark)"
+            elif d1 < d2:
+                assigned_label = 0  # Team 1
+                assigned_to = "team 1"
+            else:
+                assigned_label = 1  # Team 2
+                assigned_to = "team 2"
+
+            # Debug: print HSV and distances (use track_id for consistent numbering with video)
+            display_id = track_ids[i] if track_ids is not None else i
+            print(f"Player #{display_id}: HSV={player_hsv}, Sat={saturation:.0f}, Val={value:.0f}, d1={d1:.1f}, d2={d2:.1f}, d_ref={d_ref:.1f} -> {assigned_to}")
+
+            # Use color-based assignment if clear difference, otherwise use k-means
+            if is_very_dark or is_dark or abs(d1 - d2) > threshold:
+                final_labels.append(assigned_label)
+            else:
+                final_labels.append(kmeans_labels[i])
+        return final_labels
+    
+    @staticmethod
     def color_based_team_assignment(avg_hsvs, kmeans_labels, team1_hsv, team2_hsv, threshold=15):
         """
         Assigns players to teams based on color similarity and k-means clustering results.
@@ -515,42 +686,6 @@ class VideoProcessing():
                 final_labels.append(color_label)
         return final_labels
     
-    @staticmethod
-    def detect_center_circle(frame):
-        """
-        Detects the center circle of a football pitch in the given frame.
-        Returns (center_x, center_y, radius) if found, else None.
-        """
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        blur = cv2.GaussianBlur(gray, (7, 7), 2)
-        edges = cv2.Canny(blur, 50, 150)
-
-        # Hough Circle Transform
-        circles = cv2.HoughCircles(
-            edges,
-            cv2.HOUGH_GRADIENT,
-            dp=1.2,
-            minDist=100,
-            param1=100,
-            param2=30,
-            minRadius=30,
-            maxRadius=120
-        )
-
-        if circles is not None:
-            circles = np.uint16(np.around(circles))
-            # Take the largest circle (most likely the center circle)
-            largest = max(circles[0, :], key=lambda c: c[2])
-            center_x, center_y, radius = largest
-            # Draw for debug
-            cv2.circle(frame, (center_x, center_y), radius, (0, 255, 0), 2)
-            cv2.circle(frame, (center_x, center_y), 2, (0, 0, 255), 3)
-            cv2.imshow("Center Circle Debug", frame)
-            cv2.waitKey(1)
-            return (center_x, center_y, radius)
-        else:
-            print("No center circle detected.")
-            return None
         
     def get_points_from_user(image, num_points=4, window_name="Select Points"):
         points = []
