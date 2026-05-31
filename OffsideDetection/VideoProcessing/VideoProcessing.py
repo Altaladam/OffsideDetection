@@ -69,8 +69,10 @@ class VideoProcessing():
         # cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
         MODEL_NAME = "yolo11l-seg.pt"
-        model = YOLO(MODEL_NAME)
-        model.to('cuda')
+        yolo_detector = YOLOSegmentation(device="cuda", conf_threshold=0.3)
+        YOLOSegmentation.download_soccernet_data(local_directory="dataset/SoccerNet", password="s0cc3rn3t")
+        # model = YOLO(MODEL_NAME)
+        # model.to('cuda')
         CONF_THRESHOLD = 0.3
 
         # Get the first frame for pitch corner calibration
@@ -174,21 +176,19 @@ class VideoProcessing():
             
             prev_gray = curr_gray.copy()
 
-            results = model(frame)
-            boxes = results[0].boxes
-            mask = boxes.conf.cpu().numpy() > CONF_THRESHOLD
-            filtered_boxes = boxes[mask]
+            detections = yolo_detector.detect_players_and_ball(frame)
+            player_boxes = [d['xyxy'] for d in detections['players']]
             
             # Convert YOLO detections to supervision Detections format for ByteTrack
-            if len(filtered_boxes) > 0:
-                xyxy = filtered_boxes.xyxy.cpu().numpy()
-                conf = filtered_boxes.conf.cpu().numpy()
-                cls = filtered_boxes.cls.cpu().numpy() if filtered_boxes.cls is not None else np.zeros(len(conf))
+            if len(player_boxes) > 0:
+                xyxy = np.array(player_boxes, dtype=np.float32)
+                conf = np.array([d['confidence'] for d in detections['players']], dtype=np.float32)
+                cls = [d['class_id'] if d['class_id'] is not None else 0 for d in detections['players']]
                 
                 detections = sv.Detections(
                     xyxy=xyxy,
                     confidence=conf,
-                    class_id=cls.astype(int)
+                    class_id=np.array(cls).astype(int)
                 )
                 
                 # Apply camera motion compensation to improve tracking during camera movement

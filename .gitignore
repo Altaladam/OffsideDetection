@@ -412,3 +412,10 @@ vid.mov
 yolov8m-seg.pt
 OffsideDetection/fm_test_2.mkv
 OffsideDetection/fm_test.mkv
+*.jpg
+*.jpeg
+*.png
+train.zip
+*.ini
+*.txt
+args.yaml

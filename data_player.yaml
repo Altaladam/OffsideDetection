@@ -1,0 +1,7 @@
+path: E:\egyetem\projektmunka\OffsideDetection\dataset\yolo_player_dataset
+train: images/train
+val: images/val
+test: images/test
+
+nc: 1
+names: ['player']
