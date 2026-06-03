@@ -131,9 +131,10 @@ class YOLOSegmentation:
     def convert_soccernet_to_yolo(soccernet_dir: str = None, output_dir: str = "dataset/player_detection",
                                   frame_width: int = 1280, frame_height: int = 720):
         """
-        Convert SoccerNet bounding box JSON files to YOLO txt format.
+        Convert SoccerNet MOT gt.txt files to YOLO txt format.
         Extracts player bounding boxes and creates label files in YOLO format.
         
+        MOT format: frame_id, track_id, x, y, width, height, conf, class_id, visibility
         YOLO format: class_id x_center y_center width height (all normalized 0-1)
         """
         soccernet_dir = Path(soccernet_dir or YOLOSegmentation.DEFAULT_SOCCERNET_DIR)
@@ -148,67 +149,79 @@ class YOLOSegmentation:
         converted_count = 0
         total_boxes = 0
         
-        # Find all boundingbox_maskrcnn.json files
-        json_files = list(soccernet_dir.rglob("boundingbox_maskrcnn.json"))
-        print(f"Found {len(json_files)} annotation files in {soccernet_dir}")
+        # Find all gt.txt files in MOT format
+        gt_files = list(soccernet_dir.rglob("gt/gt.txt"))
+        print(f"Found {len(gt_files)} annotation files (MOT format) in {soccernet_dir}")
         
-        for json_file in json_files:
+        for gt_file in gt_files:
             try:
-                with open(json_file, 'r') as f:
-                    data = json.load(f)
-                
                 # Get the match directory
-                match_dir = json_file.parent
-                match_name = json_file.parent.name
+                match_dir = gt_file.parent.parent
+                match_name = match_dir.name
                 print(f"Processing {match_name}...")
                 
-                # Process each frame annotation
-                frame_num = 0
-                for frame_data in data:
-                    if 'players' not in frame_data or not frame_data['players']:
-                        frame_num += 1
-                        continue
-                    
-                    # Create label file
-                    label_filename = labels_dir / f"{match_name}_frame_{frame_num}.txt"
+                # Read MOT gt.txt file
+                # Format: frame_id, track_id, x, y, width, height, conf, class_id, visibility
+                frame_boxes = {}  # frame_id -> list of boxes
+                
+                with open(gt_file, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        
+                        parts = line.split(',')
+                        if len(parts) < 6:
+                            continue
+                        
+                        frame_id = int(parts[0])
+                        x = float(parts[2])
+                        y = float(parts[3])
+                        w = float(parts[4])
+                        h = float(parts[5])
+                        
+                        # Skip invalid boxes
+                        if w <= 0 or h <= 0:
+                            continue
+                        
+                        # Convert from (x, y, width, height) to (x1, y1, x2, y2)
+                        x1, y1 = x, y
+                        x2, y2 = x + w, y + h
+                        
+                        # Clamp to frame boundaries
+                        x1 = max(0, min(x1, frame_width))
+                        x2 = max(0, min(x2, frame_width))
+                        y1 = max(0, min(y1, frame_height))
+                        y2 = max(0, min(y2, frame_height))
+                        
+                        # Skip if box is now invalid
+                        if x1 >= x2 or y1 >= y2:
+                            continue
+                        
+                        if frame_id not in frame_boxes:
+                            frame_boxes[frame_id] = []
+                        frame_boxes[frame_id].append((x1, y1, x2, y2))
+                
+                # Write label files
+                for frame_id in sorted(frame_boxes.keys()):
+                    label_filename = labels_dir / f"{match_name}_frame_{frame_id}.txt"
                     
                     with open(label_filename, 'w') as label_file:
-                        frame_has_boxes = False
-                        for player in frame_data['players']:
-                            # Player format: [x1, y1, x2, y2] in pixel coordinates
-                            boundingbox = player.get('boundingbox', [])
-                            if not boundingbox or len(boundingbox) != 4:
-                                continue
-                            
-                            x1, y1, x2, y2 = boundingbox
-                            
-                            # Clamp to frame boundaries
-                            x1 = max(0, min(x1, frame_width))
-                            x2 = max(0, min(x2, frame_width))
-                            y1 = max(0, min(y1, frame_height))
-                            y2 = max(0, min(y2, frame_height))
-                            
-                            # Skip invalid boxes
-                            if x1 >= x2 or y1 >= y2:
-                                continue
-                            
+                        for x1, y1, x2, y2 in frame_boxes[frame_id]:
                             # Convert to YOLO format: normalized center coordinates
                             x_center = (x1 + x2) / 2.0 / frame_width
                             y_center = (y1 + y2) / 2.0 / frame_height
-                            width = (x2 - x1) / frame_width
-                            height = (y2 - y1) / frame_height
+                            norm_width = (x2 - x1) / frame_width
+                            norm_height = (y2 - y1) / frame_height
                             
                             # Class 0 = player
-                            label_file.write(f"0 {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f}\n")
+                            label_file.write(f"0 {x_center:.6f} {y_center:.6f} {norm_width:.6f} {norm_height:.6f}\n")
                             total_boxes += 1
-                            frame_has_boxes = True
                     
-                    if frame_has_boxes:
-                        converted_count += 1
-                    frame_num += 1
+                    converted_count += 1
                 
             except Exception as e:
-                print(f"Error processing {json_file}: {e}")
+                print(f"Error processing {gt_file}: {e}")
                 continue
         
         print(f"✓ Converted {converted_count} frames with {total_boxes} player boxes to {output_dir}")
@@ -253,6 +266,9 @@ class YOLOSegmentation:
         
         print(f"✓ Created minimal test dataset at {output_dataset}")
         return str(output_dataset)
+
+    @staticmethod
+    def generate_synthetic_images(labels_dir: str, images_dir: str, width: int = 1280, height: int = 720):
         """
         Generate synthetic placeholder images for labels (when actual video frames not available).
         Creates random images that match YOLO label format for training.
@@ -367,8 +383,9 @@ names: ['player']
         return str(output_path)
 
     @staticmethod
-    def train_on_soccernet(soccernet_dir: str = None, epochs: int = 50, batch_size: int = 16, 
-                          device: str = "0", img_size: int = 640, use_test_data: bool = False):
+    def train_on_soccernet(soccernet_dir: str = None, epochs: int = 50, batch_size: int = 8, 
+                          device: str = "0", img_size: int = 416, use_test_data: bool = False,
+                          skip_preparation: bool = False, quick_mode: bool = False, model_size: str = "l"):
         """
         Train a custom YOLO model on SoccerNet player detection data.
         
@@ -379,16 +396,38 @@ names: ['player']
             device: CUDA device ID (e.g., "0") or "cpu"
             img_size: Input image size for YOLO
             use_test_data: If True, create minimal test data instead of using SoccerNet
+            skip_preparation: If True, skip conversion and dataset creation (use existing dataset)
+            quick_mode: If True, use smaller model and fewer epochs for fast training
+            model_size: YOLO model size - 's' (small), 'm' (medium), 'l' (large) [default: l]
         
         Returns:
             Trained model path
         """
+        # Quick mode overrides for fast training
+        if quick_mode:
+            epochs = 10
+            batch_size = 16
+            img_size = 320
+            model_size = "s"  # Use small model
+            print("\n[QUICK MODE] Using small model, 10 epochs, 320px images, batch 16")
+            print("             (Expected time: 30 minutes - 1 hour on GPU)\n")
         print("\n" + "="*70)
-        print("YOLO Player Detection Training")
+        if skip_preparation:
+            print("YOLO Player Detection Training (Existing Dataset)")
+        else:
+            print("YOLO Player Detection Training")
         print("="*70)
         
         # Step 0: Check if using test data or SoccerNet data
-        if use_test_data:
+        if skip_preparation:
+            # Use existing dataset directly
+            print("\nUsing existing dataset (skipping preparation)...")
+            dataset_dir = "dataset/yolo_player_dataset"
+            if not Path(dataset_dir).exists():
+                print(f"ERROR: Dataset not found at {dataset_dir}")
+                print(f"Please run without --skip-prep first to create the dataset")
+                return None
+        elif use_test_data:
             print("\n[0/3] Creating minimal test dataset for debugging...")
             dataset_dir = YOLOSegmentation.create_minimal_test_data(num_samples=100)
         else:
@@ -419,22 +458,26 @@ names: ['player']
                 generate_images=True
             )
         
-        # Step 3: Create data.yaml
-        print(f"\n[3/4] Creating data.yaml configuration...")
+        # Step 3 (or 1 if skipped prep): Create data.yaml
+        step_num = "3/4" if not skip_preparation else "1/2"
+        print(f"\n[{step_num}] Creating data.yaml configuration...")
         data_yaml = YOLOSegmentation.create_data_yaml(
             dataset_dir=dataset_dir,
             output_yaml="data_player.yaml"
         )
         
-        # Step 4: Train YOLO model
-        print("\n[4/4] Training YOLO model...")
-        print(f"     Epochs: {epochs}, Batch: {batch_size}, Device: {device}, Image size: {img_size}")
-        print(f"     Using detection model (yolo11l.pt) for bounding box data")
-        print(f"     Note: SoccerNet provides bounding boxes only, not segmentation masks")
+        # Step 4 (or 2 if skipped prep): Train YOLO model
+        step_num = "4/4" if not skip_preparation else "2/2"
+        print(f"\n[{step_num}] Training YOLO model...")
+        print(f"     Model: yolo11{model_size}, Epochs: {epochs}, Batch: {batch_size}, Image size: {img_size}")
+        print(f"     Device: {device}")
+        if not skip_preparation:
+            print(f"     Note: SoccerNet provides bounding boxes only, not segmentation masks")
         
-        # Use detection model (yolo11l.pt) instead of segmentation (yolo11l-seg.pt)
+        # Use detection model instead of segmentation (yolo11l-seg.pt)
         # because SoccerNet only provides bounding boxes, not segmentation masks
-        model = YOLO("yolo11l.pt")
+        model_name = f"yolo11{model_size}.pt"  # e.g., yolo11s.pt, yolo11m.pt, yolo11l.pt
+        model = YOLO(model_name)
         
         results = model.train(
             data=data_yaml,
@@ -442,12 +485,14 @@ names: ['player']
             imgsz=img_size,
             batch=batch_size,
             device=device,
-            patience=5,
+            patience=3 if quick_mode else 5,  # Early stopping if no improvement
             save=True,
             project="runs/detect",
             name="player_detection",
             pretrained=True,
-            optimizer='SGD'
+            optimizer='SGD',
+            hsv_h=0.015 if quick_mode else 0.015,  # Reduce augmentation in quick mode
+            mosaic=0.5 if quick_mode else 1.0  # Reduce mosaic augmentation
         )
         
         print("\n✓ Training completed!")
@@ -469,25 +514,28 @@ if __name__ == "__main__":
         print("YOLO Training with SoccerNet Data")
         print("-" * 60)
         
-        # Download SoccerNet data if password provided
-        if len(sys.argv) > 2:
+        # Check for --quick flag
+        quick_mode = "--quick" in sys.argv
+        
+        # Download SoccerNet data if password provided (and not empty)
+        if len(sys.argv) > 2 and sys.argv[2] and sys.argv[2].strip() and sys.argv[2] != "--quick":
             password = sys.argv[2]
             print(f"\nDownloading SoccerNet data (password provided)...")
             YOLOSegmentation.download_soccernet_data(password=password)
         else:
             print("\nUsing existing SoccerNet data...")
-            print("If you haven't downloaded it yet, run: python yolo_segmentation.py download <password>")
         
         # Train model
-        epochs = int(sys.argv[3]) if len(sys.argv) > 3 else 50
-        batch_size = int(sys.argv[4]) if len(sys.argv) > 4 else 16
-        device = sys.argv[5] if len(sys.argv) > 5 else "0"
+        epochs = int(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[3] != "--quick" else (10 if quick_mode else 50)
+        batch_size = int(sys.argv[4]) if len(sys.argv) > 4 and sys.argv[4] != "--quick" else (16 if quick_mode else 16)
+        device = sys.argv[5] if len(sys.argv) > 5 and sys.argv[5] != "--quick" else "0"
         
         best_model = YOLOSegmentation.train_on_soccernet(
             epochs=epochs,
             batch_size=batch_size,
             device=device,
-            use_test_data=False
+            use_test_data=False,
+            quick_mode=quick_mode
         )
         if best_model:
             print(f"\n✓ Training complete! Best model: {best_model}")
@@ -523,6 +571,28 @@ if __name__ == "__main__":
             YOLOSegmentation.download_soccernet_data(password=password)
             print("✓ Download complete!")
         
+    elif len(sys.argv) > 1 and sys.argv[1] == "train-existing":
+        # Training on existing dataset (skip conversion and image generation)
+        print("YOLO Training with Existing Dataset (Fast Mode)")
+        print("-" * 60)
+        
+        # Check for --quick flag
+        quick_mode = "--quick" in sys.argv
+        
+        epochs = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2] != "--quick" else (10 if quick_mode else 50)
+        batch_size = int(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[3] != "--quick" else (16 if quick_mode else 8)
+        device = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] != "--quick" else "0"
+        
+        best_model = YOLOSegmentation.train_on_soccernet(
+            epochs=epochs,
+            batch_size=batch_size,
+            device=device,
+            skip_preparation=True,
+            quick_mode=quick_mode
+        )
+        if best_model:
+            print(f"\n✓ Training complete! Best model: {best_model}")
+        
     else:
         # Help
         print("="*70)
@@ -531,15 +601,32 @@ if __name__ == "__main__":
         print("\nUsage:")
         print("  Download SoccerNet data:")
         print("    python yolo_segmentation.py download <password>")
-        print("\n  Train on SoccerNet data:")
-        print("    python yolo_segmentation.py train [password] [epochs] [batch_size] [device]")
-        print("    python yolo_segmentation.py train mypassword 50 16 0")
+        print("\n  Train on SoccerNet data (full pipeline, first run):")
+        print("    python yolo_segmentation.py train [password] [epochs] [batch_size] [device] [--quick]")
+        print("    python yolo_segmentation.py train '' 50 8 0          # Full: 10+ hours")
+        print("    python yolo_segmentation.py train --quick             # Quick: 30-60 mins")
+        print("\n  Train on existing dataset (after first run, skips conversion/image gen):")
+        print("    python yolo_segmentation.py train-existing [epochs] [batch_size] [device] [--quick]")
+        print("    python yolo_segmentation.py train-existing 100 8 0   # Full: 5+ hours")
+        print("    python yolo_segmentation.py train-existing --quick    # Quick: 30-60 mins")
         print("\n  Quick test with synthetic data:")
         print("    python yolo_segmentation.py test [epochs] [batch_size] [device]")
         print("    python yolo_segmentation.py test 5 8 0")
+        print("\nQuick mode details:")
+        print("  --quick flag uses:")
+        print("    - Small model (yolo11s vs yolo11l)")
+        print("    - 10 epochs (vs 50)")
+        print("    - 320x320 images (vs 416x416)")
+        print("    - Batch 16 (vs 8)")
+        print("  This gives 10-20x faster training with reasonable accuracy")
         print("\nExample workflow:")
-        print("  1. python yolo_segmentation.py download <your-password>")
-        print("  2. python yolo_segmentation.py train <your-password> 50 16 0")
+        print("  First run (full pipeline):")
+        print("    1. python yolo_segmentation.py download <your-password>")
+        print("    2. python yolo_segmentation.py train '' 50 8 0")
+        print("\n  Subsequent runs (skip conversion/image generation):")
+        print("    python yolo_segmentation.py train-existing 100 8 0")
+        print("    or faster:")
+        print("    python yolo_segmentation.py train-existing --quick")
         print("\nFor quick testing (no SoccerNet data needed):")
         print("  python yolo_segmentation.py test 5 8 0")
         print("="*70)

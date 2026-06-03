@@ -177,13 +177,13 @@ class VideoProcessing():
             prev_gray = curr_gray.copy()
 
             detections = yolo_detector.detect_players_and_ball(frame)
-            player_boxes = [d['xyxy'] for d in detections['players']]
+            players = detections["players"]  # Only use this
             
             # Convert YOLO detections to supervision Detections format for ByteTrack
-            if len(player_boxes) > 0:
-                xyxy = np.array(player_boxes, dtype=np.float32)
-                conf = np.array([d['confidence'] for d in detections['players']], dtype=np.float32)
-                cls = [d['class_id'] if d['class_id'] is not None else 0 for d in detections['players']]
+            if len(players) > 0:
+                xyxy = np.array([d['xyxy'] for d in players], dtype=np.float32)
+                conf = np.array([d['confidence'] for d in players], dtype=np.float32)
+                cls = [d['class_id'] if d['class_id'] is not None else 0 for d in players]
                 
                 detections = sv.Detections(
                     xyxy=xyxy,
