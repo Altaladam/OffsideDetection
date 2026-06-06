@@ -29,26 +29,25 @@ class YOLOSegmentation:
             downloader.password = password
         
         print(f"Downloading SoccerNet bounding box annotations...")
-        print(f"  This downloads annotation files (~3GB, no video files)")
         
-        # Download bounding box annotations (no videos, to keep size small)
+        # Download bounding box annotations
         try:
             downloader.downloadDataTask(task="tracking", split=["train", "test", "challenge"])
-            print(f"✓ Downloaded tracking annotations")
+            print(f"Downloaded tracking annotations")
         except Exception as e:
-            print(f"Note: Could not download tracking task: {e}")
+            print(f"Could not download tracking task: {e}")
         
-        try:
-            downloader.downloadDataTask(task="tracking-2023", split=["train", "test", "challenge"])
-            print(f"✓ Downloaded tracking-2023 annotations")
-        except Exception as e:
-            print(f"Note: Could not download tracking-2023 task: {e}")
+        # try:
+        #     downloader.downloadDataTask(task="tracking-2023", split=["train", "test", "challenge"])
+        #     print(f"Downloaded tracking-2023 annotations")
+        # except Exception as e:
+        #     print(f"Could not download tracking-2023 task: {e}")
 
-        print(f"✓ SoccerNet data downloaded to {local_directory}")
+        print(f"SoccerNet data downloaded to {local_directory}")
         return local_directory
 
     def _get_target_class_ids(self):
-        """Return class IDs for players and balls based on the loaded model names."""
+        # Return class IDs for players and balls based on the loaded model names.
         target_ids = {"player": [], "ball": []}
         for class_id, class_name in self.names.items():
             normalized = class_name.lower()
@@ -61,7 +60,6 @@ class YOLOSegmentation:
     def detect_players_and_ball(self, frame, conf_threshold: float = None):
         """
         Run inference on a frame and return player and ball detections.
-
         Returns a dictionary with keys: players, balls, and all_detections.
         """
         conf_threshold = conf_threshold if conf_threshold is not None else self.conf_threshold
@@ -133,7 +131,6 @@ class YOLOSegmentation:
         """
         Convert SoccerNet MOT gt.txt files to YOLO txt format.
         Extracts player bounding boxes and creates label files in YOLO format.
-        
         MOT format: frame_id, track_id, x, y, width, height, conf, class_id, visibility
         YOLO format: class_id x_center y_center width height (all normalized 0-1)
         """
@@ -224,7 +221,7 @@ class YOLOSegmentation:
                 print(f"Error processing {gt_file}: {e}")
                 continue
         
-        print(f"✓ Converted {converted_count} frames with {total_boxes} player boxes to {output_dir}")
+        print(f"Converted {converted_count} frames with {total_boxes} player boxes to {output_dir}")
         return str(output_dir), converted_count, total_boxes
 
     @staticmethod
@@ -264,7 +261,7 @@ class YOLOSegmentation:
                 
                 sample_idx += 1
         
-        print(f"✓ Created minimal test dataset at {output_dataset}")
+        print(f"Created minimal test dataset at {output_dataset}")
         return str(output_dataset)
 
     @staticmethod
@@ -294,7 +291,7 @@ class YOLOSegmentation:
             if generated_count % 100 == 0:
                 print(f"    Generated {generated_count} images...")
         
-        print(f"✓ Generated {generated_count} synthetic images in {images_dir}")
+        print(f"Generated {generated_count} synthetic images in {images_dir}")
         return generated_count
 
     @staticmethod
@@ -318,7 +315,7 @@ class YOLOSegmentation:
         print(f"Found {len(all_labels)} total label files")
         
         if len(all_labels) == 0:
-            print("WARNING: No label files found! Check if SoccerNet data was downloaded correctly.")
+            print("No label files found! Check if SoccerNet data was downloaded correctly.")
             return str(output_dataset)
         
         # Split into train/val/test (70% train, 15% val, 15% test)
@@ -359,12 +356,12 @@ class YOLOSegmentation:
                     images_dir=str(images_split_dir)
                 )
         
-        print(f"\n✓ Dataset structure created at {output_dataset}")
+        print(f"\nDataset structure created at {output_dataset}")
         return str(output_dataset)
 
     @staticmethod
     def create_data_yaml(dataset_dir: str, output_yaml: str = "data_player.yaml"):
-        """Create data.yaml configuration for YOLO training."""
+        # Create data.yaml configuration for YOLO training.
         dataset_path = Path(dataset_dir).resolve()
         yaml_content = f"""path: {dataset_path}
 train: images/train
@@ -409,7 +406,7 @@ names: ['player']
             batch_size = 16
             img_size = 320
             model_size = "s"  # Use small model
-            print("\n[QUICK MODE] Using small model, 10 epochs, 320px images, batch 16")
+            print("\nQuick mode: Using small model, 10 epochs, 320px images, batch 16")
             print("             (Expected time: 30 minutes - 1 hour on GPU)\n")
         print("\n" + "="*70)
         if skip_preparation:
@@ -424,8 +421,8 @@ names: ['player']
             print("\nUsing existing dataset (skipping preparation)...")
             dataset_dir = "dataset/yolo_player_dataset"
             if not Path(dataset_dir).exists():
-                print(f"ERROR: Dataset not found at {dataset_dir}")
-                print(f"Please run without --skip-prep first to create the dataset")
+                print(f"Dataset not found at {dataset_dir}")
+                print(f"Run without --skip-prep first to create the dataset")
                 return None
         elif use_test_data:
             print("\n[0/3] Creating minimal test dataset for debugging...")
@@ -448,7 +445,7 @@ names: ['player']
                 print("\nTo use minimal test data instead: python yolo_segmentation.py test")
                 return None
             
-            print(f"     ✓ Converted {frame_count} frames with {box_count} player boxes")
+            print(f"     Converted {frame_count} frames with {box_count} player boxes")
             
             # Step 2: Create training dataset structure
             print("\n[2/4] Creating training dataset structure with synthetic images...")
@@ -471,8 +468,6 @@ names: ['player']
         print(f"\n[{step_num}] Training YOLO model...")
         print(f"     Model: yolo11{model_size}, Epochs: {epochs}, Batch: {batch_size}, Image size: {img_size}")
         print(f"     Device: {device}")
-        if not skip_preparation:
-            print(f"     Note: SoccerNet provides bounding boxes only, not segmentation masks")
         
         # Use detection model instead of segmentation (yolo11l-seg.pt)
         # because SoccerNet only provides bounding boxes, not segmentation masks
@@ -495,12 +490,12 @@ names: ['player']
             mosaic=0.5 if quick_mode else 1.0  # Reduce mosaic augmentation
         )
         
-        print("\n✓ Training completed!")
+        print("\nTraining completed!")
         print(f"Results saved to: {results.save_dir}")
         
         # Return path to best model
         best_model_path = Path(results.save_dir) / "weights" / "best.pt"
-        print(f"✓ Best model saved to: {best_model_path}")
+        print(f"Best model saved to: {best_model_path}")
         print("="*70)
         
         return str(best_model_path)
@@ -538,7 +533,7 @@ if __name__ == "__main__":
             quick_mode=quick_mode
         )
         if best_model:
-            print(f"\n✓ Training complete! Best model: {best_model}")
+            print(f"\nTraining complete! Best model: {best_model}")
         
     elif len(sys.argv) > 1 and sys.argv[1] == "test":
         # Quick test with minimal synthetic data
@@ -557,7 +552,7 @@ if __name__ == "__main__":
             use_test_data=True
         )
         if best_model:
-            print(f"\n✓ Test training complete! Model: {best_model}")
+            print(f"\nTest training complete! Model: {best_model}")
         
     elif len(sys.argv) > 1 and sys.argv[1] == "download":
         # Download only
@@ -569,7 +564,7 @@ if __name__ == "__main__":
             print("Usage: python yolo_segmentation.py download <password>")
         else:
             YOLOSegmentation.download_soccernet_data(password=password)
-            print("✓ Download complete!")
+            print("Download complete!")
         
     elif len(sys.argv) > 1 and sys.argv[1] == "train-existing":
         # Training on existing dataset (skip conversion and image generation)
@@ -591,13 +586,10 @@ if __name__ == "__main__":
             quick_mode=quick_mode
         )
         if best_model:
-            print(f"\n✓ Training complete! Best model: {best_model}")
+            print(f"\nTraining complete! Best model: {best_model}")
         
     else:
         # Help
-        print("="*70)
-        print("YOLO Player Detection Training Pipeline")
-        print("="*70)
         print("\nUsage:")
         print("  Download SoccerNet data:")
         print("    python yolo_segmentation.py download <password>")
@@ -613,12 +605,11 @@ if __name__ == "__main__":
         print("    python yolo_segmentation.py test [epochs] [batch_size] [device]")
         print("    python yolo_segmentation.py test 5 8 0")
         print("\nQuick mode details:")
-        print("  --quick flag uses:")
-        print("    - Small model (yolo11s vs yolo11l)")
-        print("    - 10 epochs (vs 50)")
+        print("  --quick flag uses preset parameters:")
+        print("    - Small model (yolo11s)")
+        print("    - 10 epochs")
         print("    - 320x320 images (vs 416x416)")
-        print("    - Batch 16 (vs 8)")
-        print("  This gives 10-20x faster training with reasonable accuracy")
+        print("    - Batch 16")
         print("\nExample workflow:")
         print("  First run (full pipeline):")
         print("    1. python yolo_segmentation.py download <your-password>")
@@ -629,4 +620,3 @@ if __name__ == "__main__":
         print("    python yolo_segmentation.py train-existing --quick")
         print("\nFor quick testing (no SoccerNet data needed):")
         print("  python yolo_segmentation.py test 5 8 0")
-        print("="*70)

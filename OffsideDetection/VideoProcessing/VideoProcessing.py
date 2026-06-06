@@ -70,7 +70,7 @@ class VideoProcessing():
 
         MODEL_NAME = "yolo11l-seg.pt"
         yolo_detector = YOLOSegmentation(device="cuda", conf_threshold=0.3)
-        YOLOSegmentation.download_soccernet_data(local_directory="dataset/SoccerNet", password="s0cc3rn3t")
+        #YOLOSegmentation.download_soccernet_data(local_directory="dataset/SoccerNet", password="s0cc3rn3t")
         # model = YOLO(MODEL_NAME)
         # model.to('cuda')
         CONF_THRESHOLD = 0.3
@@ -175,6 +175,27 @@ class VideoProcessing():
                     camera_motion_transform = np.eye(3, dtype=np.float32)
             
             prev_gray = curr_gray.copy()
+
+            #Generic YOLOv11 detection code
+            
+            # results = model(frame)
+            # boxes = results[0].boxes
+            # mask = boxes.conf.cpu().numpy() > CONF_THRESHOLD
+            # filtered_boxes = boxes[mask]
+            
+            # # Convert YOLO detections to supervision Detections format for ByteTrack
+            # if len(filtered_boxes) > 0:
+            #     xyxy = filtered_boxes.xyxy.cpu().numpy()
+            #     conf = filtered_boxes.conf.cpu().numpy()
+            #     cls = filtered_boxes.cls.cpu().numpy() if filtered_boxes.cls is not None else np.zeros(len(conf))
+                
+            #     detections = sv.Detections(
+            #         xyxy=xyxy,
+            #         confidence=conf,
+            #         class_id=cls.astype(int)
+            #     )
+
+            #Custom trained YOLOv11 segmentation model
 
             detections = yolo_detector.detect_players_and_ball(frame)
             players = detections["players"]  # Only use this
