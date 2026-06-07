@@ -1,3 +1,4 @@
+from anyio import sleep
 import cv2, pafy, os
 from cv2.gapi import video
 from pytube import YouTube
@@ -71,8 +72,8 @@ class VideoProcessing():
         MODEL_NAME = "yolo11l-seg.pt"
         yolo_detector = YOLOSegmentation(device="cuda", conf_threshold=0.3)
         #YOLOSegmentation.download_soccernet_data(local_directory="dataset/SoccerNet", password="s0cc3rn3t")
-        # model = YOLO(MODEL_NAME)
-        # model.to('cuda')
+        model = YOLO(MODEL_NAME)
+        model.to('cuda')
         CONF_THRESHOLD = 0.3
 
         # Get the first frame for pitch corner calibration
@@ -126,8 +127,15 @@ class VideoProcessing():
         bf_matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
 
 
+        p = 0
 
         while True:
+            
+            # For testing and comparison - pause after 1000 frames
+            # p += 1
+            # if p == 330:
+            #     cv2.waitKey(0)
+            
             if not ret:
                 break
             
@@ -211,6 +219,7 @@ class VideoProcessing():
                     confidence=conf,
                     class_id=np.array(cls).astype(int)
                 )
+                # Comment until here to use generic YOLOv11 detections instead of custom model
                 
                 # Apply camera motion compensation to improve tracking during camera movement
                 # Transform detection boxes to account for camera motion between frames
@@ -425,7 +434,8 @@ class VideoProcessing():
             key = cv2.waitKey(30)
             if key == 27:
                 break
-            
+            if key == ord('c'):
+                cv2.waitKey(0)  # Pause until next key press for debugging
             # Read next frame
             ret, frame = cap.read()
 

@@ -470,7 +470,6 @@ names: ['player']
         print(f"     Device: {device}")
         
         # Use detection model instead of segmentation (yolo11l-seg.pt)
-        # because SoccerNet only provides bounding boxes, not segmentation masks
         model_name = f"yolo11{model_size}.pt"  # e.g., yolo11s.pt, yolo11m.pt, yolo11l.pt
         model = YOLO(model_name)
         
